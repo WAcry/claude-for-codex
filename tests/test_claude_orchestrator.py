@@ -99,13 +99,14 @@ class ClaudeOrchestratorTests(unittest.TestCase):
                 (state_root / "jobs" / "job-ui" / "job.json").read_text(encoding="utf-8")
             )
             command = job["last_command"]
-            self.assertIn("--model", command)
-            self.assertIn("sonnet", command)
-            self.assertIn("--effort", command)
-            self.assertIn("high", command)
-            self.assertNotIn("--bare", command)
-            self.assertIn("--verbose", command)
-            self.assertNotIn(prompt, command)
+            self.assertEqual("bash", command[0])
+            self.assertEqual("-lc", command[1])
+            self.assertIn("claude -p", command[2])
+            self.assertIn("--model sonnet", command[2])
+            self.assertIn("--effort high", command[2])
+            self.assertNotIn("--bare", command[2])
+            self.assertIn("--verbose", command[2])
+            self.assertNotIn(prompt, command[2])
             self.assertNotIn(prompt, job["last_command_text"])
             self.assertEqual(
                 prompt,
@@ -203,15 +204,14 @@ class ClaudeOrchestratorTests(unittest.TestCase):
                 (state_root / "jobs" / "job-resume" / "job.json").read_text(encoding="utf-8")
             )
             command = job["attempts"][-1]["command"]
-            self.assertIn("--resume", command)
-            self.assertIn("--name", command)
-            self.assertIn("frontend-pass", command)
-            self.assertIn("--add-dir", command)
-            self.assertIn(str(extra_dir), command)
-            self.assertIn("--allowedTools", command)
-            self.assertIn("Read,Edit", command)
-            self.assertIn("--verbose", command)
-            self.assertNotIn("Continue from the previous stopping point.", command)
+            self.assertEqual("bash", command[0])
+            self.assertEqual("-lc", command[1])
+            self.assertIn("--resume", command[2])
+            self.assertIn("--name frontend-pass", command[2])
+            self.assertIn(f"--add-dir {str(extra_dir)}", command[2])
+            self.assertIn("--allowedTools Read,Edit", command[2])
+            self.assertIn("--verbose", command[2])
+            self.assertNotIn("Continue from the previous stopping point.", command[2])
             self.assertEqual(
                 "Continue from the previous stopping point.",
                 Path(job["attempts"][-1]["stdin_path"]).read_text(encoding="utf-8"),

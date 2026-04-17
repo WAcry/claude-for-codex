@@ -12,6 +12,7 @@ python ./claude-code-orchestrator/scripts/claude_orchestrator.py launch \
 ```
 
 The full prompt is sent to Claude through stdin. The command metadata keeps a short preview, while `prompt.txt` stores the full launch prompt on disk.
+The helper wraps Claude with `bash -lc` so the job runs with login-shell semantics by default.
 
 Inspect every job in the registry:
 
@@ -77,7 +78,7 @@ The registry root also contains `registry.json`, a summary index of all jobs.
 ## Recommended Workflow
 
 1. Dry-run first when changing prompt shape, model/effort, or hook behavior.
-2. Launch the real run once the command looks correct.
+2. Launch the real run once the command looks correct. The recorded command should show `bash -lc 'claude ...'` rather than a direct bare executable call.
 3. Use `status` instead of guessing which session ID belongs to which task, and check `stderr.log` when a run fails or stalls.
 4. Resume the same job instead of creating ad hoc new sessions for follow-up instructions.
 5. Leave Codex review until after Claude Code finishes.

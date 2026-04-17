@@ -29,6 +29,8 @@ python ./claude-code-orchestrator/scripts/claude_orchestrator.py launch \
   --output-dir /abs/path/to/state
 ```
 
+The helper launches Claude through `bash -lc` by default so the run sees the same login-shell configuration, wrapper scripts, and PATH setup that a human operator would expect in a normal terminal session.
+
 4. Inspect progress or resume the same Claude session later.
 
 ```bash
@@ -49,6 +51,7 @@ python ./claude-code-orchestrator/scripts/claude_orchestrator.py resume JOB_ID -
 - Prefer one bounded job per outcome. If you need unrelated workstreams, launch multiple jobs and track them separately in the registry.
 - Preserve model and effort choices in the job metadata so later reviewers can see how the run was configured.
 - Use `--dry-run` first when you are checking prompt quality, hook wiring, or command construction.
+- Prefer login-shell semantics for direct manual invocations too. If you are not using the helper script, prefer `bash -lc 'claude ...'` over calling `claude` from an unknown stripped shell.
 - After Claude Code finishes, do a second-pass Codex review before you merge, present, or trust the output.
 
 ## Deferred Questions

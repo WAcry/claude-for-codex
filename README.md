@@ -4,6 +4,8 @@ This repository contains an installable Codex skill named `claude-code-orchestra
 
 The skill helps Codex delegate focused work to one or more local Claude Code CLI runs while keeping Codex as the primary responsible agent. It is designed for cases where Claude Code is a good execution partner, such as frontend polish, demo building, and documentation drafting, but the final review and acceptance should still stay with Codex.
 
+The helper defaults to launching Claude through `bash -lc`, so the delegated run inherits the same login-shell configuration and wrapper behavior that users normally rely on in a terminal session.
+
 ## What Is Included
 
 - `claude-code-orchestrator/SKILL.md`: the skill itself
@@ -48,6 +50,7 @@ python ./claude-code-orchestrator/scripts/claude_orchestrator.py launch \
 ```
 
 The orchestrator stores the full prompt in `prompt.txt` and feeds it to Claude over stdin, so long handoff prompts do not need to appear in the shell command or process list.
+The generated command uses `bash -lc 'claude ...'` by default rather than calling `claude` directly.
 
 Inspect tracked jobs:
 
@@ -101,7 +104,7 @@ See [claude-code-orchestrator/references/deferred-questions.md](claude-code-orch
 Run the local validation set from the repository root:
 
 ```bash
-python /home/coder/.codex/skills/.system/skill-creator/scripts/quick_validate.py ./claude-code-orchestrator
+python "${CODEX_HOME:-$HOME/.codex}/skills/.system/skill-creator/scripts/quick_validate.py" ./claude-code-orchestrator
 python ./claude-code-orchestrator/scripts/claude_orchestrator.py --help
 python ./claude-code-orchestrator/scripts/claude_orchestrator.py launch --help
 python ./claude-code-orchestrator/scripts/claude_orchestrator.py status --help
@@ -110,10 +113,6 @@ python ./claude-code-orchestrator/scripts/claude_orchestrator.py answer --help
 python -m unittest discover -s tests -p 'test_*.py'
 ```
 
-## Current Environment Limitation
-
-In this workspace, `claude --version` works and `claude auth status` reports a configured auth helper, but live `claude -p` runs currently fail because the helper path depends on `coder external-auth access-token` and this environment does not provide `CODER_AGENT_URL`. Because of that, the repository treats dry-runs, state tests, and fixture-backed deferred-question checks as the baseline validation path, and live Claude execution as optional when authentication works.
-
 ## Operating Principle
 
 This repository does not try to make Claude Code the primary agent. The intended loop is:
@@ -121,3 +120,5 @@ This repository does not try to make Claude Code the primary agent. The intended
 1. Codex scopes the task and prepares the handoff.
 2. Claude Code performs the bounded delegated work and re-checks context independently.
 3. Codex reviews the result before accepting or presenting it.
+
+For a real live run, the only assumption is that `claude -p` already works in your own shell environment. Use `--dry-run` first if you want to verify command construction before spending model calls.

@@ -93,6 +93,10 @@ def shell_join(parts: Iterable[str]) -> str:
     return shlex.join(list(parts))
 
 
+def wrap_with_login_shell(command: list[str]) -> list[str]:
+    return ["bash", "-lc", shell_join(command)]
+
+
 def is_process_alive(pid: int | None) -> bool:
     if not pid:
         return False
@@ -355,7 +359,7 @@ def cmd_launch(args: argparse.Namespace) -> int:
         "exit_code": None,
         "attempts": [],
     }
-    command = build_common_claude_args(job)
+    command = wrap_with_login_shell(build_common_claude_args(job))
     append_attempt(job, kind="launch", prompt=prompt, command=command, dry_run=args.dry_run)
     write_job_artifacts(job, prompt)
     save_job(state_root, job)
@@ -483,8 +487,9 @@ def cmd_resume(args: argparse.Namespace) -> int:
     job["model"] = override_model
     job["effort"] = override_effort
     job["use_bare"] = override_bare
-    command = ["claude", "-p", "--resume", job["session_id"]]
-    command = append_shared_runtime_args(command, job)
+    command = wrap_with_login_shell(
+        append_shared_runtime_args(["claude", "-p", "--resume", job["session_id"]], job)
+    )
     append_attempt(job, kind="resume", prompt=args.message, command=command, dry_run=args.dry_run)
     save_job(state_root, job)
     if args.dry_run:
