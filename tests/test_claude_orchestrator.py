@@ -34,67 +34,77 @@ class ClaudeOrchestratorTests(unittest.TestCase):
             self.module.main(argv)
         return buffer.getvalue()
 
+    def patch_tempdir(self, tempdir):
+        return mock.patch.object(self.module.tempfile, "gettempdir", return_value=tempdir)
+
+    def state_root(self, tempdir, state_id):
+        return Path(tempdir) / f"claude-code-orchestrator-{state_id}"
+
     def test_launch_dry_run_records_two_distinct_jobs(self):
         with tempfile.TemporaryDirectory() as tempdir:
-            state_root = Path(tempdir) / "state"
+            state_id = "abc123"
+            state_root = self.state_root(tempdir, state_id)
             workdir = Path(tempdir) / "repo"
             workdir.mkdir()
-            self.run_main_quietly(
-                [
-                    "launch",
-                    "--prompt",
-                    "Build a demo page.",
-                    "--workdir",
-                    str(workdir),
-                    "--output-dir",
-                    str(state_root),
-                    "--job-id",
-                    "job-one",
-                    "--dry-run",
-                ]
-            )
-            self.run_main_quietly(
-                [
-                    "launch",
-                    "--prompt",
-                    "Draft release notes.",
-                    "--workdir",
-                    str(workdir),
-                    "--output-dir",
-                    str(state_root),
-                    "--job-id",
-                    "job-two",
-                    "--dry-run",
-                ]
-            )
+            with self.patch_tempdir(tempdir):
+                self.run_main_quietly(
+                    [
+                        "launch",
+                        "--prompt",
+                        "Build a demo page.",
+                        "--workdir",
+                        str(workdir),
+                        "--state-id",
+                        state_id,
+                        "--job-id",
+                        "job-one",
+                        "--dry-run",
+                    ]
+                )
+                self.run_main_quietly(
+                    [
+                        "launch",
+                        "--prompt",
+                        "Draft release notes.",
+                        "--workdir",
+                        str(workdir),
+                        "--state-id",
+                        state_id,
+                        "--job-id",
+                        "job-two",
+                        "--dry-run",
+                    ]
+                )
             registry = json.loads((state_root / "registry.json").read_text(encoding="utf-8"))
             self.assertEqual(2, len(registry["jobs"]))
             self.assertNotEqual(registry["jobs"][0]["id"], registry["jobs"][1]["id"])
 
     def test_launch_dry_run_preserves_model_effort_and_non_bare_default(self):
         with tempfile.TemporaryDirectory() as tempdir:
-            state_root = Path(tempdir) / "state"
+            state_id = "def456"
+            state_root = self.state_root(tempdir, state_id)
             workdir = Path(tempdir) / "repo"
             workdir.mkdir()
             prompt = "Polish the UI with a launch-specific secret token."
-            self.run_main_quietly(
-                [
-                    "launch",
-                    "--prompt",
-                    prompt,
-                    "--workdir",
-                    str(workdir),
-                    "--output-dir",
-                    str(state_root),
-                    "--job-id",
-                    "job-ui",
-                    "--model",
-                    "sonnet",
-                    "--effort",
-                    "high",
-                    "--dry-run",
-                ]
-            )
+            with self.patch_tempdir(tempdir):
+                self.run_main_quietly(
+                    [
+                        "launch",
+                        "--prompt",
+                        prompt,
+                        "--workdir",
+                        str(workdir),
+                        "--state-id",
+                        state_id,
+                        "--job-id",
+                        "job-ui",
+                        "--model",
+                        "sonnet",
+                        "--effort",
+                        "high",
+                        "--dry-run",
+                    ]
+                )
             job = json.loads(
                 (state_root / "jobs" / "job-ui" / "job.json").read_text(encoding="utf-8")
             )
@@ -111,6 +121,32 @@ class ClaudeOrchestratorTests(unittest.TestCase):
             self.assertEqual(
                 prompt,
                 (state_root / "jobs" / "job-ui" / "prompt.txt").read_text(encoding="utf-8"),
+            )
+
+    def test_launch_without_state_id_allocates_short_id_in_system_temp(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            workdir = Path(tempdir) / "repo"
+            workdir.mkdir()
+            with self.patch_tempdir(tempdir):
+                payload = self.run_main_quietly(
+                    [
+                        "launch",
+                        "--prompt",
+                        "Create a short-lived job.",
+                        "--workdir",
+                        str(workdir),
+                        "--job-id",
+                        "job-auto",
+                        "--dry-run",
+                        "--json",
+                    ]
+                )
+            result = json.loads(payload)
+            state_id = result["job"]["state_id"]
+            self.assertRegex(state_id, r"^[a-z0-9]{6}$")
+            self.assertEqual(
+                str(self.state_root(tempdir, state_id)),
+                result["job"]["state_root"],
             )
 
     def test_hook_defers_without_answer_and_allows_with_updated_input(self):
@@ -159,47 +195,49 @@ class ClaudeOrchestratorTests(unittest.TestCase):
 
     def test_resume_dry_run_preserves_extra_runtime_flags(self):
         with tempfile.TemporaryDirectory() as tempdir:
-            state_root = Path(tempdir) / "state"
+            state_id = "ghi789"
+            state_root = self.state_root(tempdir, state_id)
             workdir = Path(tempdir) / "repo"
             extra_dir = Path(tempdir) / "shared"
             workdir.mkdir()
             extra_dir.mkdir()
-            self.run_main_quietly(
-                [
-                    "launch",
-                    "--prompt",
-                    "Build the first version.",
-                    "--workdir",
-                    str(workdir),
-                    "--output-dir",
-                    str(state_root),
-                    "--job-id",
-                    "job-resume",
-                    "--title",
-                    "frontend-pass",
-                    "--model",
-                    "sonnet",
-                    "--effort",
-                    "high",
-                    "--add-dir",
-                    str(extra_dir),
-                    "--allowed-tools",
-                    "Read",
-                    "Edit",
-                    "--dry-run",
-                ]
-            )
-            self.run_main_quietly(
-                [
-                    "resume",
-                    "job-resume",
-                    "--output-dir",
-                    str(state_root),
-                    "--message",
-                    "Continue from the previous stopping point.",
-                    "--dry-run",
-                ]
-            )
+            with self.patch_tempdir(tempdir):
+                self.run_main_quietly(
+                    [
+                        "launch",
+                        "--prompt",
+                        "Build the first version.",
+                        "--workdir",
+                        str(workdir),
+                        "--state-id",
+                        state_id,
+                        "--job-id",
+                        "job-resume",
+                        "--title",
+                        "frontend-pass",
+                        "--model",
+                        "sonnet",
+                        "--effort",
+                        "high",
+                        "--add-dir",
+                        str(extra_dir),
+                        "--allowed-tools",
+                        "Read",
+                        "Edit",
+                        "--dry-run",
+                    ]
+                )
+                self.run_main_quietly(
+                    [
+                        "resume",
+                        "job-resume",
+                        "--state-id",
+                        state_id,
+                        "--message",
+                        "Continue from the previous stopping point.",
+                        "--dry-run",
+                    ]
+                )
             job = json.loads(
                 (state_root / "jobs" / "job-resume" / "job.json").read_text(encoding="utf-8")
             )
@@ -219,124 +257,136 @@ class ClaudeOrchestratorTests(unittest.TestCase):
 
     def test_launch_rejects_duplicate_job_id_without_replace(self):
         with tempfile.TemporaryDirectory() as tempdir:
-            state_root = Path(tempdir) / "state"
+            state_id = "jkl012"
             workdir = Path(tempdir) / "repo"
             workdir.mkdir()
-            self.run_main_quietly(
-                [
-                    "launch",
-                    "--prompt",
-                    "First version.",
-                    "--workdir",
-                    str(workdir),
-                    "--output-dir",
-                    str(state_root),
-                    "--job-id",
-                    "shared",
-                    "--dry-run",
-                ]
-            )
-            with self.assertRaises(SystemExit) as ctx:
+            with self.patch_tempdir(tempdir):
                 self.run_main_quietly(
                     [
                         "launch",
                         "--prompt",
-                        "Second version.",
+                        "First version.",
                         "--workdir",
                         str(workdir),
-                        "--output-dir",
-                        str(state_root),
+                        "--state-id",
+                        state_id,
                         "--job-id",
                         "shared",
                         "--dry-run",
                     ]
                 )
+                with self.assertRaises(SystemExit) as ctx:
+                    self.run_main_quietly(
+                        [
+                            "launch",
+                            "--prompt",
+                            "Second version.",
+                            "--workdir",
+                            str(workdir),
+                            "--state-id",
+                            state_id,
+                            "--job-id",
+                            "shared",
+                            "--dry-run",
+                        ]
+                    )
             self.assertIn("already exists", str(ctx.exception))
 
-    def test_status_resume_and_answer_can_resolve_state_root_from_workdir(self):
+    def test_status_resume_and_answer_use_state_id(self):
         with tempfile.TemporaryDirectory() as tempdir:
+            state_id = "mno345"
             workdir = Path(tempdir) / "repo"
             workdir.mkdir()
             prompt = "Inspect the cross-repo state behavior."
-            self.run_main_quietly(
-                [
-                    "launch",
-                    "--prompt",
-                    prompt,
-                    "--workdir",
-                    str(workdir),
-                    "--job-id",
-                    "job-cross",
-                    "--dry-run",
-                ]
-            )
-            status_output = self.run_main_quietly(
-                [
-                    "status",
-                    "job-cross",
-                    "--workdir",
-                    str(workdir),
-                ]
-            )
+            state_root = self.state_root(tempdir, state_id)
+            with self.patch_tempdir(tempdir):
+                self.run_main_quietly(
+                    [
+                        "launch",
+                        "--prompt",
+                        prompt,
+                        "--workdir",
+                        str(workdir),
+                        "--state-id",
+                        state_id,
+                        "--job-id",
+                        "job-cross",
+                        "--dry-run",
+                    ]
+                )
+                status_output = self.run_main_quietly(
+                    [
+                        "status",
+                        "job-cross",
+                        "--state-id",
+                        state_id,
+                    ]
+                )
             self.assertIn("job-cross", status_output)
 
-            self.run_main_quietly(
-                [
-                    "resume",
-                    "job-cross",
-                    "--workdir",
-                    str(workdir),
-                    "--message",
-                    "Continue carefully.",
-                    "--dry-run",
-                ]
-            )
-            state_root = workdir / ".claude-orchestrator-state"
+            with self.patch_tempdir(tempdir):
+                self.run_main_quietly(
+                    [
+                        "resume",
+                        "job-cross",
+                        "--state-id",
+                        state_id,
+                        "--message",
+                        "Continue carefully.",
+                        "--dry-run",
+                    ]
+                )
             pending_tool_path = state_root / "jobs" / "job-cross" / "pending-tool.json"
             pending_tool_path.write_text("{}", encoding="utf-8")
-            self.run_main_quietly(
-                [
-                    "answer",
-                    "job-cross",
-                    "--workdir",
-                    str(workdir),
-                    "--updated-input-json",
-                    '{"selectedOptionIds":["frontend"]}',
-                ]
-            )
+            with self.patch_tempdir(tempdir):
+                self.run_main_quietly(
+                    [
+                        "answer",
+                        "job-cross",
+                        "--state-id",
+                        state_id,
+                        "--updated-input-json",
+                        '{"selectedOptionIds":["frontend"]}',
+                    ]
+                )
             self.assertTrue((state_root / "jobs" / "job-cross" / "pending-answer.json").exists())
 
-    def test_answer_resume_now_uses_workdir_for_default_state_root(self):
+    def test_answer_resume_now_uses_state_id(self):
         with tempfile.TemporaryDirectory() as tempdir:
+            state_id = "pqr678"
             workdir = Path(tempdir) / "repo"
             workdir.mkdir()
-            self.run_main_quietly(
-                [
-                    "launch",
-                    "--prompt",
-                    "Inspect deferred resume.",
-                    "--workdir",
-                    str(workdir),
-                    "--job-id",
-                    "job-answer",
-                    "--dry-run",
-                ]
-            )
-            state_root = workdir / ".claude-orchestrator-state"
+            state_root = self.state_root(tempdir, state_id)
+            with self.patch_tempdir(tempdir):
+                self.run_main_quietly(
+                    [
+                        "launch",
+                        "--prompt",
+                        "Inspect deferred resume.",
+                        "--workdir",
+                        str(workdir),
+                        "--state-id",
+                        state_id,
+                        "--job-id",
+                        "job-answer",
+                        "--dry-run",
+                    ]
+                )
             pending_tool_path = state_root / "jobs" / "job-answer" / "pending-tool.json"
             pending_tool_path.write_text("{}", encoding="utf-8")
-            self.run_main_quietly(
-                [
-                    "answer",
-                    "job-answer",
-                    "--workdir",
-                    str(workdir),
-                    "--updated-input-json",
-                    '{"selectedOptionIds":["frontend"]}',
-                    "--resume-now",
-                    "--dry-run",
-                ]
-            )
+            with self.patch_tempdir(tempdir):
+                self.run_main_quietly(
+                    [
+                        "answer",
+                        "job-answer",
+                        "--state-id",
+                        state_id,
+                        "--updated-input-json",
+                        '{"selectedOptionIds":["frontend"]}',
+                        "--resume-now",
+                        "--dry-run",
+                    ]
+                )
             job = json.loads(
                 (state_root / "jobs" / "job-answer" / "job.json").read_text(encoding="utf-8")
             )
@@ -345,13 +395,15 @@ class ClaudeOrchestratorTests(unittest.TestCase):
 
     def test_status_output_includes_log_paths_and_stderr_tail_for_failed_jobs(self):
         with tempfile.TemporaryDirectory() as tempdir:
-            state_root = Path(tempdir) / "state"
+            state_id = "stu901"
+            state_root = self.state_root(tempdir, state_id)
             job_dir = state_root / "jobs" / "job-failed"
             job_dir.mkdir(parents=True)
             (job_dir / "stdout.log").write_text("stdout line\n", encoding="utf-8")
             (job_dir / "stderr.log").write_text("first error\nsecond error\n", encoding="utf-8")
             job = {
                 "id": "job-failed",
+                "state_id": state_id,
                 "title": "failed-job",
                 "created_at": "2026-04-17T00:00:00+00:00",
                 "updated_at": "2026-04-17T00:00:01+00:00",
@@ -375,16 +427,17 @@ class ClaudeOrchestratorTests(unittest.TestCase):
             }
             self.module.write_json(job_dir / "job.json", job)
             self.module.rebuild_registry(state_root)
-            output = self.run_main_quietly(
-                [
-                    "status",
-                    "job-failed",
-                    "--output-dir",
-                    str(state_root),
-                    "--tail",
-                    "2",
-                ]
-            )
+            with self.patch_tempdir(tempdir):
+                output = self.run_main_quietly(
+                    [
+                        "status",
+                        "job-failed",
+                        "--state-id",
+                        state_id,
+                        "--tail",
+                        "2",
+                    ]
+                )
             self.assertIn("stdout_log:", output)
             self.assertIn("stderr_log:", output)
             self.assertIn("-- stderr tail --", output)
@@ -392,23 +445,25 @@ class ClaudeOrchestratorTests(unittest.TestCase):
 
     def test_run_job_records_worker_start_failure_in_stderr_log(self):
         with tempfile.TemporaryDirectory() as tempdir:
-            state_root = Path(tempdir) / "state"
+            state_id = "vwx234"
+            state_root = self.state_root(tempdir, state_id)
             workdir = Path(tempdir) / "repo"
             workdir.mkdir()
-            self.run_main_quietly(
-                [
-                    "launch",
-                    "--prompt",
-                    "Try to launch Claude.",
-                    "--workdir",
-                    str(workdir),
-                    "--output-dir",
-                    str(state_root),
-                    "--job-id",
-                    "job-error",
-                    "--dry-run",
-                ]
-            )
+            with self.patch_tempdir(tempdir):
+                self.run_main_quietly(
+                    [
+                        "launch",
+                        "--prompt",
+                        "Try to launch Claude.",
+                        "--workdir",
+                        str(workdir),
+                        "--state-id",
+                        state_id,
+                        "--job-id",
+                        "job-error",
+                        "--dry-run",
+                    ]
+                )
             job_file = state_root / "jobs" / "job-error" / "job.json"
             with mock.patch.object(self.module.subprocess, "Popen", side_effect=FileNotFoundError("claude")):
                 self.module.main(["_run-job", "--job-file", str(job_file)])
@@ -422,23 +477,25 @@ class ClaudeOrchestratorTests(unittest.TestCase):
 
     def test_resume_rejects_running_job_with_live_runner_pid(self):
         with tempfile.TemporaryDirectory() as tempdir:
-            state_root = Path(tempdir) / "state"
+            state_id = "yz0123"
+            state_root = self.state_root(tempdir, state_id)
             workdir = Path(tempdir) / "repo"
             workdir.mkdir()
-            self.run_main_quietly(
-                [
-                    "launch",
-                    "--prompt",
-                    "Build the first pass.",
-                    "--workdir",
-                    str(workdir),
-                    "--output-dir",
-                    str(state_root),
-                    "--job-id",
-                    "job-running",
-                    "--dry-run",
-                ]
-            )
+            with self.patch_tempdir(tempdir):
+                self.run_main_quietly(
+                    [
+                        "launch",
+                        "--prompt",
+                        "Build the first pass.",
+                        "--workdir",
+                        str(workdir),
+                        "--state-id",
+                        state_id,
+                        "--job-id",
+                        "job-running",
+                        "--dry-run",
+                    ]
+                )
             job_path = state_root / "jobs" / "job-running" / "job.json"
             job = json.loads(job_path.read_text(encoding="utf-8"))
             job["status"] = "running"
@@ -446,17 +503,18 @@ class ClaudeOrchestratorTests(unittest.TestCase):
             job_path.write_text(json.dumps(job), encoding="utf-8")
             with mock.patch.object(self.module, "is_process_alive", return_value=True):
                 with self.assertRaises(SystemExit) as ctx:
-                    self.run_main_quietly(
-                        [
-                            "resume",
-                            "job-running",
-                            "--output-dir",
-                            str(state_root),
-                            "--message",
-                            "Continue.",
-                            "--dry-run",
-                        ]
-                    )
+                    with self.patch_tempdir(tempdir):
+                        self.run_main_quietly(
+                            [
+                                "resume",
+                                "job-running",
+                                "--state-id",
+                                state_id,
+                                "--message",
+                                "Continue.",
+                                "--dry-run",
+                            ]
+                        )
             self.assertIn("still running", str(ctx.exception))
 
     def test_launch_rejects_empty_prompt_from_stdin(self):

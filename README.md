@@ -4,7 +4,7 @@ This repository contains an installable Codex skill named `claude-code-orchestra
 
 The skill helps Codex delegate focused work to one or more local Claude Code CLI runs while keeping Codex as the primary responsible agent. It is designed for cases where Claude Code is a good execution partner, such as frontend polish, demo building, and documentation drafting, but the final review and acceptance should still stay with Codex.
 
-The helper defaults to launching Claude through `bash -lc`, so the delegated run inherits the same login-shell configuration and wrapper behavior that users normally rely on in a terminal session.
+The helper currently defaults to launching Claude through `bash -lc`, so the delegated run inherits the same login-shell configuration and wrapper behavior that users normally rely on in a terminal session.
 
 ## What Is Included
 
@@ -43,7 +43,6 @@ Create a prompt file using the handoff structure in [claude-code-orchestrator/re
 python ./claude-code-orchestrator/scripts/claude_orchestrator.py launch \
   --prompt-file /abs/path/to/prompt.txt \
   --workdir /abs/path/to/repo \
-  --output-dir ./tmp-smoke \
   --model sonnet \
   --effort high \
   --dry-run
@@ -51,36 +50,41 @@ python ./claude-code-orchestrator/scripts/claude_orchestrator.py launch \
 
 The orchestrator stores the full prompt in `prompt.txt` and feeds it to Claude over stdin, so long handoff prompts do not need to appear in the shell command or process list.
 The generated command uses `bash -lc 'claude ...'` by default rather than calling `claude` directly.
+Launch now allocates a random 6-character `state_id` and a matching state directory under the system temp folder. Save that printed `state_id` for every follow-up command.
 
 Inspect tracked jobs:
 
 ```bash
 python ./claude-code-orchestrator/scripts/claude_orchestrator.py status \
-  --output-dir ./tmp-smoke
+  --state-id abc123
 ```
 
 Resume a saved session:
 
 ```bash
 python ./claude-code-orchestrator/scripts/claude_orchestrator.py resume JOB_ID \
-  --output-dir ./tmp-smoke \
+  --state-id abc123 \
   --message "Continue from the last stopping point."
 ```
 
-If you omit `--output-dir`, use `--workdir` consistently so follow-up commands resolve the same default state root that `launch` used.
+Reuse the same printed `state_id` for `status`, `resume`, and `answer`.
 
 Answer a deferred tool call:
 
 ```bash
 python ./claude-code-orchestrator/scripts/claude_orchestrator.py answer JOB_ID \
-  --output-dir ./tmp-smoke \
+  --state-id abc123 \
   --updated-input-json '{"selectedOptionIds":["frontend"]}' \
   --resume-now
 ```
 
 ## State Model
 
-The default state root is a repo-local hidden directory named `.claude-orchestrator-state` under the target work directory. Override it with `--output-dir` when you want state elsewhere.
+State now lives under the system temp directory by default, in a path shaped like:
+
+```text
+<system temp>/claude-code-orchestrator-<state_id>/
+```
 
 Each job gets its own directory with:
 
@@ -92,6 +96,36 @@ Each job gets its own directory with:
 - `pending-tool.json` and `pending-answer.json` for deferred tool handling
 
 Job IDs are unique by default. Reusing an existing `--job-id` is rejected unless you explicitly pass `--replace`.
+
+## Multi-Run Isolation
+
+If multiple Codex instances are orchestrating multiple Claude Code jobs at the same time, do not point them all at the same state root by accident.
+
+Safe default pattern:
+
+- one orchestrator session
+- one generated `state_id`
+- many `JOB_ID`s inside that one state root only when you intentionally want one shared registry for that one orchestrator session
+
+Assume other Codex instances may exist and isolate state by default. Give each Codex session its own generated `state_id`.
+
+## Platform Guidance
+
+- Linux: first-class target for the current helper and examples
+- macOS: use the same Bash examples and the same temp-backed state-root pattern
+- Windows: prefer PowerShell conventions for temp paths and operator docs. If you need native Windows execution, validate the local Claude launcher path carefully because the current helper still wraps Claude with `bash -lc`
+
+PowerShell temp-root example:
+
+```powershell
+python .\claude-code-orchestrator\scripts\claude_orchestrator.py launch `
+  --prompt-file C:\path\to\prompt.txt `
+  --workdir C:\path\to\repo `
+  --dry-run
+
+# Read the printed state_id and reuse it later:
+python .\claude-code-orchestrator\scripts\claude_orchestrator.py status --state-id abc123
+```
 
 ## Deferred Questions
 

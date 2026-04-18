@@ -7,36 +7,36 @@ Launch a tracked Claude Code job:
 ```bash
 python ./claude-code-orchestrator/scripts/claude_orchestrator.py launch \
   --prompt-file /abs/path/to/prompt.txt \
-  --workdir /abs/path/to/repo \
-  --output-dir /abs/path/to/state
+  --workdir /abs/path/to/repo
 ```
 
 The full prompt is sent to Claude through stdin. The command metadata keeps a short preview, while `prompt.txt` stores the full launch prompt on disk.
 The helper wraps Claude with `bash -lc` so the job runs with login-shell semantics by default.
+Launch creates a random 6-character `state_id` and a matching state directory in the system temp folder. Save the printed `state_id` and reuse it for every follow-up command.
 
 Inspect every job in the registry:
 
 ```bash
 python ./claude-code-orchestrator/scripts/claude_orchestrator.py status \
-  --output-dir /abs/path/to/state
+  --state-id abc123
 ```
 
 Inspect one job and tail its logs:
 
 ```bash
 python ./claude-code-orchestrator/scripts/claude_orchestrator.py status JOB_ID \
-  --output-dir /abs/path/to/state \
+  --state-id abc123 \
   --tail 30 \
   --tail-both
 ```
 
-If you prefer the default repo-local state directory, replace `--output-dir` with `--workdir /abs/path/to/repo` for `status`, `resume`, and `answer`.
+Every orchestrator run should have its own generated `state_id`, and every follow-up command should reuse that exact id.
 
 Resume the same Claude session:
 
 ```bash
 python ./claude-code-orchestrator/scripts/claude_orchestrator.py resume JOB_ID \
-  --output-dir /abs/path/to/state \
+  --state-id abc123 \
   --message "Continue with the remaining UI polish and rerun the tests."
 ```
 
@@ -44,7 +44,7 @@ Queue an answer payload for a deferred tool call:
 
 ```bash
 python ./claude-code-orchestrator/scripts/claude_orchestrator.py answer JOB_ID \
-  --output-dir /abs/path/to/state \
+  --state-id abc123 \
   --updated-input-json '{"selectedOptionIds":["frontend"]}' \
   --resume-now
 ```
@@ -55,6 +55,7 @@ Replace an existing stopped job only when you explicitly mean to discard its old
 python ./claude-code-orchestrator/scripts/claude_orchestrator.py launch \
   --prompt-file /abs/path/to/prompt.txt \
   --workdir /abs/path/to/repo \
+  --state-id abc123 \
   --job-id frontend-pass \
   --replace
 ```
@@ -75,6 +76,30 @@ Important files:
 
 The registry root also contains `registry.json`, a summary index of all jobs.
 
+## Temp Directory Behavior
+
+Launch stores state under the system temp directory using:
+
+```bash
+<system temp>/claude-code-orchestrator-<state_id>/
+```
+
+Examples:
+
+- Linux or macOS:
+
+```text
+/tmp/claude-code-orchestrator-abc123/
+```
+
+- PowerShell / Windows:
+
+```text
+$env:TEMP\claude-code-orchestrator-abc123\
+```
+
+Do not share one `state_id` across unrelated orchestrators. Assume other Codex instances may exist and isolate state by default.
+
 ## Recommended Workflow
 
 1. Dry-run first when changing prompt shape, model/effort, or hook behavior.
@@ -82,6 +107,13 @@ The registry root also contains `registry.json`, a summary index of all jobs.
 3. Use `status` instead of guessing which session ID belongs to which task, and check `stderr.log` when a run fails or stalls.
 4. Resume the same job instead of creating ad hoc new sessions for follow-up instructions.
 5. Leave Codex review until after Claude Code finishes.
+6. Reuse the same printed `state_id` for every command in that one orchestration run.
+
+## Platform Guidance
+
+- Linux: use the Bash examples as written
+- macOS: use the same Bash examples and the same generated temp-backed `state_id` flow
+- Windows: prefer PowerShell path conventions in operator docs and wrappers; if you are not using WSL, validate the local Claude launcher before depending on the current Bash-based helper
 
 ## Multi-Job Scheduling
 

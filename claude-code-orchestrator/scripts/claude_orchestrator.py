@@ -6,10 +6,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import secrets
 import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import traceback
 import uuid
 from datetime import datetime, timezone
@@ -29,6 +31,8 @@ PENDING_TOOL_FILENAME = "pending-tool.json"
 PENDING_ANSWER_FILENAME = "pending-answer.json"
 ATTEMPT_INPUT_TEMPLATE = "attempt-{attempt:04d}-input.txt"
 WORKER_FAILURE_EXIT_CODE = 127
+STATE_ID_LENGTH = 6
+STATE_ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789"
 
 
 def utc_now() -> str:
@@ -59,15 +63,29 @@ def remove_tree(path: Path) -> None:
         shutil.rmtree(path)
 
 
-def resolve_state_root(raw_path: str | None, workdir: str | None = None) -> Path:
-    if raw_path:
-        return Path(raw_path).expanduser().resolve()
-    base = Path(workdir).expanduser().resolve() if workdir else Path.cwd()
-    return (base / DEFAULT_STATE_ROOT).resolve()
+def generate_state_id() -> str:
+    return "".join(secrets.choice(STATE_ID_ALPHABET) for _ in range(STATE_ID_LENGTH))
 
 
-def resolve_followup_state_root(args: argparse.Namespace) -> Path:
-    return resolve_state_root(getattr(args, "state_root", None), getattr(args, "workdir", None))
+def state_root_from_id(state_id: str) -> Path:
+    return (Path(tempfile.gettempdir()) / f"claude-code-orchestrator-{state_id}").resolve()
+
+
+def resolve_state_root(state_id: str | None) -> Path:
+    if not state_id:
+        raise SystemExit("Provide --state-id from the launch output.")
+    return state_root_from_id(state_id)
+
+
+def allocate_state_id(requested_state_id: str | None) -> tuple[str, Path]:
+    if requested_state_id:
+        return requested_state_id, state_root_from_id(requested_state_id)
+    for _ in range(32):
+        candidate = generate_state_id()
+        state_root = state_root_from_id(candidate)
+        if not state_root.exists():
+            return candidate, state_root
+    raise SystemExit("Failed to allocate a unique state id after multiple attempts.")
 
 
 def jobs_root(state_root: Path) -> Path:
@@ -161,6 +179,7 @@ def rebuild_registry(state_root: Path) -> None:
         payload = refresh_job(payload)
         summary = {
             "id": payload["id"],
+            "state_id": payload.get("state_id"),
             "title": payload.get("title"),
             "status": payload.get("status"),
             "session_id": payload.get("session_id"),
@@ -316,6 +335,8 @@ def print_payload(payload: dict[str, Any], as_json: bool) -> None:
     if payload.get("job"):
         job = payload["job"]
         print(f"job_id: {job['id']}")
+        print(f"state_id: {job['state_id']}")
+        print(f"state_root: {job['state_root']}")
         print(f"status: {job['status']}")
         print(f"session_id: {job['session_id']}")
         print(f"command: {job['last_command_text']}")
@@ -324,7 +345,7 @@ def print_payload(payload: dict[str, Any], as_json: bool) -> None:
 def cmd_launch(args: argparse.Namespace) -> int:
     prompt = read_prompt(args)
     workdir = Path(args.workdir or Path.cwd()).expanduser().resolve()
-    state_root = resolve_state_root(args.state_root, str(workdir))
+    state_id, state_root = allocate_state_id(args.state_id)
     job_id = args.job_id or uuid.uuid4().hex[:12]
     session_id = args.session_id or str(uuid.uuid4())
     job_dir = job_root(state_root, job_id)
@@ -340,6 +361,7 @@ def cmd_launch(args: argparse.Namespace) -> int:
         remove_tree(job_dir)
     job = {
         "id": job_id,
+        "state_id": state_id,
         "title": args.title or f"claude-{job_id}",
         "created_at": utc_now(),
         "updated_at": utc_now(),
@@ -401,13 +423,15 @@ def start_worker(job: dict[str, Any], as_json: bool) -> int:
 
 
 def cmd_status(args: argparse.Namespace) -> int:
-    state_root = resolve_followup_state_root(args)
+    state_root = resolve_state_root(args.state_id)
     rebuild_registry(state_root)
     if args.job_id:
         job = refresh_job(load_job(state_root, args.job_id))
         save_job(state_root, job)
         output = {
             "id": job["id"],
+            "state_id": job["state_id"],
+            "state_root": job["state_root"],
             "title": job["title"],
             "status": job["status"],
             "session_id": job["session_id"],
@@ -473,7 +497,7 @@ def should_tail_stderr(status: str | None, args: argparse.Namespace) -> bool:
 
 
 def cmd_resume(args: argparse.Namespace) -> int:
-    state_root = resolve_followup_state_root(args)
+    state_root = resolve_state_root(args.state_id)
     job = refresh_job(load_job(state_root, args.job_id))
     if job.get("status") == "running" and is_process_alive(job.get("runner_pid")):
         raise SystemExit(
@@ -499,7 +523,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
 
 
 def cmd_answer(args: argparse.Namespace) -> int:
-    state_root = resolve_followup_state_root(args)
+    state_root = resolve_state_root(args.state_id)
     job = refresh_job(load_job(state_root, args.job_id))
     pending_path = Path(job["job_dir"]) / PENDING_TOOL_FILENAME
     if not pending_path.exists():
@@ -516,8 +540,7 @@ def cmd_answer(args: argparse.Namespace) -> int:
     if args.resume_now:
         resume_args = argparse.Namespace(
             job_id=args.job_id,
-            workdir=args.workdir,
-            state_root=args.state_root,
+            state_id=args.state_id,
             model=None,
             effort=None,
             bare=False,
@@ -665,7 +688,7 @@ def build_parser() -> argparse.ArgumentParser:
     launch.add_argument("--prompt")
     launch.add_argument("--prompt-file")
     launch.add_argument("--workdir")
-    launch.add_argument("--output-dir", "--state-root", dest="state_root")
+    launch.add_argument("--state-id")
     launch.add_argument("--job-id")
     launch.add_argument("--session-id")
     launch.add_argument("--title")
@@ -683,8 +706,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     status = subparsers.add_parser("status", help="Show job status or the full registry.")
     status.add_argument("job_id", nargs="?")
-    status.add_argument("--workdir")
-    status.add_argument("--output-dir", "--state-root", dest="state_root")
+    status.add_argument("--state-id", required=True)
     status.add_argument("--tail", type=int, default=0)
     status.add_argument("--tail-stderr", action="store_true")
     status.add_argument("--tail-both", action="store_true")
@@ -693,8 +715,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     resume = subparsers.add_parser("resume", help="Resume a saved Claude session.")
     resume.add_argument("job_id")
-    resume.add_argument("--workdir")
-    resume.add_argument("--output-dir", "--state-root", dest="state_root")
+    resume.add_argument("--state-id", required=True)
     resume.add_argument("--message")
     resume.add_argument("--model")
     resume.add_argument("--effort")
@@ -708,8 +729,7 @@ def build_parser() -> argparse.ArgumentParser:
         "answer", help="Write updatedInput for a deferred tool call and optionally resume."
     )
     answer.add_argument("job_id")
-    answer.add_argument("--workdir")
-    answer.add_argument("--output-dir", "--state-root", dest="state_root")
+    answer.add_argument("--state-id", required=True)
     answer.add_argument("--updated-input-json")
     answer.add_argument("--updated-input-file")
     answer.add_argument("--note")
