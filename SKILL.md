@@ -60,14 +60,6 @@ Claude's output is more readable for users. Your responsibility is to review acc
 
 ## Quick Start
 
-This orchestrator intentionally runs Claude Code in fully non-interactive mode for Codex automation:
-
-- no Claude permission approvals
-- no Claude sandbox gating
-- no need to pass extra flags at launch time
-
-It assumes the outer environment already provides the real safety boundary, such as a VM, container, or Codex sandbox.
-
 ```bash
 # Launch a task
 python ~/.codex/skills/claude-for-codex/scripts/claude_orchestrator.py launch \
@@ -153,7 +145,6 @@ It also automatically adds `state_root` to Claude's allowed directories. Use `--
 - **One task, one focus**: each launch corresponds to a limited-scope task. Unrelated work should be launched as separate tasks and tracked independently.
 - **Review after completion**: wait for Claude Code to finish before reviewing; do not intervene midway.
 - **Use one-pass prompts**: write prompts that Claude can finish without follow-up interaction.
-- **Default to full permissions**: the orchestrator bypasses Claude's own approval layer by default. Treat the surrounding VM/container/sandbox as the safety boundary.
 
 ## Command Reference
 
