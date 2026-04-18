@@ -4,7 +4,7 @@ A skill that enables Codex (or GPT-powered agents) to delegate scoped subtasks t
 
 ## What It Does
 
-Codex investigates, reasons, and plans. Claude Code executes presentation-layer work:
+Codex investigates, reasons, plans, codes. Claude Code executes presentation-layer work:
 
 | Delegated to Claude | Why |
 |---------------------|-----|
