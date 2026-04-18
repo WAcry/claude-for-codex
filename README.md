@@ -1,6 +1,6 @@
 # Claude for Codex
 
-A skill that enables Codex (or GPT-powered agents) to delegate scoped subtasks to a local Claude Code instance—combining GPT's reasoning with Claude's aesthetics and readability.
+This skill enables Codex (or GPT-powered agents) to delegate scoped subtasks to a local Claude Code instance. GPT reasons more accurately but explains poorly; Claude is less reliable and less intelligent, yet produces polished UI, accessible writing, and human-friendly documentation. This skill combines both.
 
 ## What It Does
 
