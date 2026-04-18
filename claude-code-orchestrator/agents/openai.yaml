@@ -1,4 +1,0 @@
-interface:
-  display_name: "Claude Code Orchestrator"
-  short_description: "Run and coordinate Claude Code jobs"
-  default_prompt: "Use $claude-code-orchestrator to delegate a focused task to Claude Code, track the run, and review the result before accepting it."
