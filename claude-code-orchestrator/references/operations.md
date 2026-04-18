@@ -83,7 +83,7 @@ The registry root also contains `registry.json`, a summary index of all jobs.
 Launch stores state under the system temp directory using:
 
 ```bash
-<system temp>/claude-code-orchestrator-<state_id>/
+<system temp>/codex-claude-code-orchestrator-state-<state_id>/
 ```
 
 Examples:
@@ -91,13 +91,13 @@ Examples:
 - Linux or macOS:
 
 ```text
-/tmp/claude-code-orchestrator-abc123/
+/tmp/codex-claude-code-orchestrator-state-abc123/
 ```
 
 - PowerShell / Windows:
 
 ```text
-$env:TEMP\claude-code-orchestrator-abc123\
+$env:TEMP\codex-claude-code-orchestrator-state-abc123\
 ```
 
 Do not share one `state_id` across unrelated orchestrators. Assume other Codex instances may exist and isolate state by default.

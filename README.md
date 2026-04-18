@@ -86,7 +86,7 @@ python ./claude-code-orchestrator/scripts/claude_orchestrator.py answer JOB_ID \
 State now lives under the system temp directory by default, in a path shaped like:
 
 ```text
-<system temp>/claude-code-orchestrator-<state_id>/
+<system temp>/codex-claude-code-orchestrator-state-<state_id>/
 ```
 
 Each job gets its own directory with:

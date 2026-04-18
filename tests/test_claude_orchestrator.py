@@ -38,7 +38,7 @@ class ClaudeOrchestratorTests(unittest.TestCase):
         return mock.patch.object(self.module.tempfile, "gettempdir", return_value=tempdir)
 
     def state_root(self, tempdir, state_id):
-        return Path(tempdir) / f"claude-code-orchestrator-{state_id}"
+        return Path(tempdir) / f"{self.module.STATE_ROOT_PREFIX}-{state_id}"
 
     def test_launch_dry_run_records_two_distinct_jobs(self):
         with tempfile.TemporaryDirectory() as tempdir:

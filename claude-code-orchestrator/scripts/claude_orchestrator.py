@@ -32,6 +32,7 @@ ATTEMPT_INPUT_TEMPLATE = "attempt-{attempt:04d}-input.txt"
 WORKER_FAILURE_EXIT_CODE = 127
 STATE_ID_LENGTH = 6
 STATE_ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789"
+STATE_ROOT_PREFIX = "codex-claude-code-orchestrator-state"
 
 
 def utc_now() -> str:
@@ -67,7 +68,7 @@ def generate_state_id() -> str:
 
 
 def state_root_from_id(state_id: str) -> Path:
-    return (Path(tempfile.gettempdir()) / f"claude-code-orchestrator-{state_id}").resolve()
+    return (Path(tempfile.gettempdir()) / f"{STATE_ROOT_PREFIX}-{state_id}").resolve()
 
 
 def resolve_state_root(state_id: str | None) -> Path:
