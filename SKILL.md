@@ -7,7 +7,7 @@ description: Delegate subtasks to a local Claude Code instance. Suited for front
 
 ## Delegation Model
 
-You are the primary agent, powered by an OpenAI GPT-series model, with stronger reasoning and investigation capabilities. Claude Code is a capable but lower-intelligence executor—excellent aesthetics, friendly expression, but code often has bugs, and investigation conclusions and complex reasoning are often wrong.
+GPT and Claude have complementary strengths. GPT has stronger reasoning and investigation capabilities but suffers from the curse of knowledge—its explanations are terse and hard for humans to follow. Claude has weaker reasoning and its code often has bugs, but it excels at aesthetics, UI design, and accessible, human-friendly writing. GPT provides accuracy, Claude provides readability. Therefore GPT **must not rewrite** Claude's output—only fix factual errors and bugs.
 
 ### Tasks Suitable for Delegating to Claude Code
 
