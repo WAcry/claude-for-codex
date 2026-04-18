@@ -26,8 +26,6 @@ SETTINGS_FILENAME = "settings.json"
 PROMPT_FILENAME = "prompt.txt"
 STDOUT_FILENAME = "stdout.log"
 STDERR_FILENAME = "stderr.log"
-PENDING_TOOL_FILENAME = "pending-tool.json"
-PENDING_ANSWER_FILENAME = "pending-answer.json"
 ATTEMPT_INPUT_TEMPLATE = "attempt-{attempt:04d}-input.txt"
 WORKER_FAILURE_EXIT_CODE = 127
 STATE_ID_LENGTH = 6
@@ -46,16 +44,29 @@ def read_json(path: Path, default: Any | None = None) -> Any:
         return json.load(handle)
 
 
-def write_json(path: Path, payload: Any) -> None:
+def atomic_write(path: Path, payload: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2, sort_keys=True)
-        handle.write("\n")
+    with tempfile.NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        dir=path.parent,
+        prefix=f".{path.name}.tmp.",
+        delete=False,
+    ) as handle:
+        handle.write(payload)
+        handle.flush()
+        os.fsync(handle.fileno())
+        tmp_path = Path(handle.name)
+    os.replace(tmp_path, path)
+
+
+def write_json(path: Path, payload: Any) -> None:
+    rendered = json.dumps(payload, indent=2, sort_keys=True)
+    atomic_write(path, f"{rendered}\n")
 
 
 def write_text(path: Path, payload: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(payload, encoding="utf-8")
+    atomic_write(path, payload)
 
 
 def remove_tree(path: Path) -> None:
@@ -100,6 +111,18 @@ def job_file(state_root: Path, job_id: str) -> Path:
     return job_root(state_root, job_id) / JOB_FILENAME
 
 
+def normalize_dir_list(paths: Iterable[str | Path]) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in paths:
+        resolved = str(Path(item).expanduser().resolve())
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        normalized.append(resolved)
+    return normalized
+
+
 def prompt_preview(prompt: str, limit: int = 120) -> str:
     collapsed = " ".join(prompt.split())
     if len(collapsed) <= limit:
@@ -116,6 +139,21 @@ def format_command(parts: Iterable[str]) -> str:
     if os.name == "nt":
         return subprocess.list2cmdline(materialized)
     return shlex.join(materialized)
+
+
+def render_launch_prompt(prompt: str, job: dict[str, Any]) -> str:
+    replacements = {
+        "{{STATE_ID}}": job["state_id"],
+        "{{STATE_ROOT}}": job["state_root"],
+        "{{JOB_ID}}": job["id"],
+        "{{JOB_DIR}}": job["job_dir"],
+        "{{WORKDIR}}": job["workdir"],
+        "{{SESSION_ID}}": job["session_id"],
+    }
+    rendered = prompt
+    for token, value in replacements.items():
+        rendered = rendered.replace(token, value)
+    return rendered
 
 
 def wrap_for_platform_launcher(command: list[str]) -> list[str]:
@@ -167,13 +205,15 @@ def fail_job(
 
 
 def refresh_job(payload: dict[str, Any]) -> dict[str, Any]:
+    if payload.get("status") == "queued" and payload.get("runner_pid") and is_process_alive(payload.get("runner_pid")):
+        payload["status"] = "running"
+        attempt = payload["attempts"][payload["current_attempt"] - 1]
+        if attempt.get("status") == "queued":
+            attempt["status"] = "running"
     if payload.get("status") == "running":
         runner_pid = payload.get("runner_pid")
         if runner_pid and not is_process_alive(runner_pid) and payload.get("exit_code") is None:
             payload["status"] = "unknown"
-    pending_tool = Path(payload["job_dir"]) / PENDING_TOOL_FILENAME
-    if pending_tool.exists() and payload.get("status") in {"running", "succeeded", "failed", "unknown"}:
-        payload["status"] = "awaiting_input"
     return payload
 
 
@@ -227,31 +267,7 @@ def read_prompt(args: argparse.Namespace) -> str:
 
 
 def build_settings(job_dir: Path) -> dict[str, Any]:
-    script_path = Path(__file__).resolve()
-    hook_command = shell_join(
-        [
-            sys.executable,
-            str(script_path),
-            "hook",
-            "--job-dir",
-            str(job_dir),
-        ]
-    )
-    return {
-        "hooks": {
-            "PreToolUse": [
-                {
-                    "matcher": "AskUserQuestion|ExitPlanMode",
-                    "hooks": [
-                        {
-                            "type": "command",
-                            "command": hook_command,
-                        }
-                    ],
-                }
-            ]
-        }
-    }
+    return {}
 
 
 def build_common_claude_args(job: dict[str, Any]) -> list[str]:
@@ -352,12 +368,13 @@ def print_payload(payload: dict[str, Any], as_json: bool) -> None:
 
 
 def cmd_launch(args: argparse.Namespace) -> int:
-    prompt = read_prompt(args)
+    raw_prompt = read_prompt(args)
     workdir = Path(args.workdir or Path.cwd()).expanduser().resolve()
     state_id, state_root = allocate_state_id(args.state_id)
     job_id = args.job_id or uuid.uuid4().hex[:12]
     session_id = args.session_id or str(uuid.uuid4())
     job_dir = job_root(state_root, job_id)
+    add_dirs = normalize_dir_list([state_root, *(args.add_dir or [])])
     existing_job_path = job_file(state_root, job_id)
     if existing_job_path.exists() and not args.replace:
         raise SystemExit(
@@ -384,12 +401,13 @@ def cmd_launch(args: argparse.Namespace) -> int:
         "use_bare": args.bare,
         "permission_mode": args.permission_mode,
         "output_format": args.output_format,
-        "add_dirs": [str(Path(item).expanduser().resolve()) for item in (args.add_dir or [])],
+        "add_dirs": add_dirs,
         "allowed_tools": args.allowed_tools or [],
         "runner_pid": None,
         "exit_code": None,
         "attempts": [],
     }
+    prompt = render_launch_prompt(raw_prompt, job)
     command = wrap_for_platform_launcher(build_common_claude_args(job))
     append_attempt(job, kind="launch", prompt=prompt, command=command, dry_run=args.dry_run)
     write_job_artifacts(job, prompt)
@@ -446,9 +464,6 @@ def cmd_status(args: argparse.Namespace) -> int:
             "session_id": job["session_id"],
             "current_attempt": job.get("current_attempt"),
             "last_command_text": job.get("last_command_text"),
-            "pending_tool_path": str(Path(job["job_dir"]) / PENDING_TOOL_FILENAME)
-            if (Path(job["job_dir"]) / PENDING_TOOL_FILENAME).exists()
-            else None,
             "stdout_log": str(Path(job["job_dir"]) / STDOUT_FILENAME),
             "stderr_log": str(Path(job["job_dir"]) / STDERR_FILENAME),
             "stdout_tail": read_log_tail(Path(job["job_dir"]) / STDOUT_FILENAME, args.tail)
@@ -466,8 +481,6 @@ def cmd_status(args: argparse.Namespace) -> int:
         print(output["last_command_text"])
         print(f"stdout_log: {output['stdout_log']}")
         print(f"stderr_log: {output['stderr_log']}")
-        if output["pending_tool_path"]:
-            print(f"pending_tool: {output['pending_tool_path']}")
         if output["stdout_tail"]:
             print("-- stdout tail --")
             for line in output["stdout_tail"]:
@@ -520,6 +533,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
     job["model"] = override_model
     job["effort"] = override_effort
     job["use_bare"] = override_bare
+    write_json(Path(job["job_dir"]) / SETTINGS_FILENAME, build_settings(Path(job["job_dir"])))
     command = wrap_for_platform_launcher(
         append_shared_runtime_args(["claude", "-p", "--resume", job["session_id"]], job)
     )
@@ -529,100 +543,6 @@ def cmd_resume(args: argparse.Namespace) -> int:
         print_payload({"message": "Prepared a dry-run resume attempt.", "job": job}, args.json)
         return 0
     return start_worker(job, args.json)
-
-
-def cmd_answer(args: argparse.Namespace) -> int:
-    state_root = resolve_state_root(args.state_id)
-    job = refresh_job(load_job(state_root, args.job_id))
-    pending_path = Path(job["job_dir"]) / PENDING_TOOL_FILENAME
-    if not pending_path.exists():
-        raise SystemExit("No pending tool payload found for this job.")
-    updated_input = read_updated_input(args)
-    payload = {
-        "written_at": utc_now(),
-        "job_id": job["id"],
-        "session_id": job["session_id"],
-        "updated_input": updated_input,
-        "note": args.note,
-    }
-    write_json(Path(job["job_dir"]) / PENDING_ANSWER_FILENAME, payload)
-    if args.resume_now:
-        resume_args = argparse.Namespace(
-            job_id=args.job_id,
-            state_id=args.state_id,
-            model=None,
-            effort=None,
-            bare=False,
-            no_bare=False,
-            dry_run=args.dry_run,
-            json=args.json,
-            message=args.message,
-        )
-        return cmd_resume(resume_args)
-    if args.json:
-        json.dump(payload, sys.stdout, indent=2, sort_keys=True)
-        sys.stdout.write("\n")
-    else:
-        print(f"Queued updatedInput for job {job['id']}.")
-    return 0
-
-
-def read_updated_input(args: argparse.Namespace) -> Any:
-    if args.updated_input_json:
-        return json.loads(args.updated_input_json)
-    if args.updated_input_file:
-        return json.loads(Path(args.updated_input_file).read_text(encoding="utf-8"))
-    raise SystemExit("Provide --updated-input-json or --updated-input-file.")
-
-
-def extract_tool_name(payload: dict[str, Any]) -> str:
-    return (
-        payload.get("tool_name")
-        or payload.get("toolName")
-        or payload.get("tool", {}).get("name")
-        or ""
-    )
-
-
-def extract_tool_input(payload: dict[str, Any]) -> Any:
-    return payload.get("tool_input") or payload.get("toolInput") or payload.get("input") or {}
-
-
-def cmd_hook(args: argparse.Namespace) -> int:
-    job_dir = Path(args.job_dir).resolve()
-    incoming = json.load(sys.stdin)
-    tool_name = extract_tool_name(incoming)
-    if tool_name not in {"AskUserQuestion", "ExitPlanMode"}:
-        json.dump({}, sys.stdout)
-        sys.stdout.write("\n")
-        return 0
-    pending = {
-        "captured_at": utc_now(),
-        "job_dir": str(job_dir),
-        "session_id": incoming.get("session_id") or incoming.get("sessionId"),
-        "hook_event_name": incoming.get("hook_event_name") or incoming.get("hookEventName"),
-        "tool_name": tool_name,
-        "tool_input": extract_tool_input(incoming),
-        "raw_input": incoming,
-    }
-    write_json(job_dir / PENDING_TOOL_FILENAME, pending)
-    answer = read_json(job_dir / PENDING_ANSWER_FILENAME)
-    if answer and answer.get("updated_input") is not None:
-        response = {
-            "permissionDecision": "allow",
-            "updatedInput": answer["updated_input"],
-        }
-        os.remove(job_dir / PENDING_ANSWER_FILENAME)
-        if (job_dir / PENDING_TOOL_FILENAME).exists():
-            os.remove(job_dir / PENDING_TOOL_FILENAME)
-    else:
-        response = {
-            "permissionDecision": "defer",
-            "permissionDecisionReason": "Waiting for orchestrator-provided updatedInput.",
-        }
-    json.dump(response, sys.stdout)
-    sys.stdout.write("\n")
-    return 0
 
 
 def cmd_run_job(args: argparse.Namespace) -> int:
@@ -654,8 +574,14 @@ def cmd_run_job(args: argparse.Namespace) -> int:
                 stderr=stderr_handle,
                 text=True,
             )
-            job["claude_pid"] = process.pid
-            save_job(state_root, job)
+            latest_job = load_job(state_root, job["id"])
+            latest_job["claude_pid"] = process.pid
+            latest_attempt = latest_job["attempts"][latest_job["current_attempt"] - 1]
+            if latest_job.get("status") == "queued":
+                latest_job["status"] = "running"
+            if latest_attempt.get("status") == "queued":
+                latest_attempt["status"] = "running"
+            save_job(state_root, latest_job)
             _, _ = process.communicate(stdin_text)
             return_code = process.returncode
         except Exception as exc:
@@ -673,18 +599,12 @@ def cmd_run_job(args: argparse.Namespace) -> int:
         attempt["finished_at"] = utc_now()
         attempt["exit_code"] = return_code
         job["exit_code"] = return_code
-        pending_exists = (Path(job["job_dir"]) / PENDING_TOOL_FILENAME).exists()
-        if pending_exists:
-            attempt["status"] = "awaiting_input"
-            job["status"] = "awaiting_input"
-        elif return_code == 0:
+        if return_code == 0:
             attempt["status"] = "succeeded"
             job["status"] = "succeeded"
         else:
             attempt["status"] = "failed"
             job["status"] = "failed"
-        if not pending_exists and (Path(job["job_dir"]) / PENDING_ANSWER_FILENAME).exists():
-            os.remove(Path(job["job_dir"]) / PENDING_ANSWER_FILENAME)
         save_job(state_root, job)
     return 0
 
@@ -733,24 +653,6 @@ def build_parser() -> argparse.ArgumentParser:
     resume.add_argument("--dry-run", action="store_true")
     resume.add_argument("--json", action="store_true")
     resume.set_defaults(func=cmd_resume)
-
-    answer = subparsers.add_parser(
-        "answer", help="Write updatedInput for a deferred tool call and optionally resume."
-    )
-    answer.add_argument("job_id")
-    answer.add_argument("--state-id", required=True)
-    answer.add_argument("--updated-input-json")
-    answer.add_argument("--updated-input-file")
-    answer.add_argument("--note")
-    answer.add_argument("--resume-now", action="store_true")
-    answer.add_argument("--message")
-    answer.add_argument("--dry-run", action="store_true")
-    answer.add_argument("--json", action="store_true")
-    answer.set_defaults(func=cmd_answer)
-
-    hook = subparsers.add_parser("hook", help="Internal per-job Claude hook.")
-    hook.add_argument("--job-dir", required=True)
-    hook.set_defaults(func=cmd_hook)
 
     run_job = subparsers.add_parser("_run-job", help=argparse.SUPPRESS)
     run_job.add_argument("--job-file", required=True)

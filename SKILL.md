@@ -61,24 +61,26 @@ Claude's output is more readable for users. Your responsibility is to review acc
 ## Quick Start
 
 ```bash
-# Launch a task (automatically assigns a state_id; save the state_id printed in the output)
-python ./claude-code-orchestrator/scripts/claude_orchestrator.py launch \
+# Launch a task
+python ~/.codex/skills/claude-for-codex/scripts/claude_orchestrator.py launch \
   --prompt-file /abs/path/to/prompt.txt \
   --workdir /abs/path/to/repo \
   --model opus --effort high
 
 # View all tasks
-python ./claude-code-orchestrator/scripts/claude_orchestrator.py status \
-  --state-id STATE_ID
+python ~/.codex/skills/claude-for-codex/scripts/claude_orchestrator.py status \
+  --state-id GENERATED_STATE_ID
 
 # View a single task + log tail
-python ./claude-code-orchestrator/scripts/claude_orchestrator.py status JOB_ID \
-  --state-id STATE_ID --tail 30
+python ~/.codex/skills/claude-for-codex/scripts/claude_orchestrator.py status JOB_ID \
+  --state-id GENERATED_STATE_ID --tail 30
 
 # Resume the same session
-python ./claude-code-orchestrator/scripts/claude_orchestrator.py resume JOB_ID \
-  --state-id STATE_ID --message "Continue with the remaining work"
+python ~/.codex/skills/claude-for-codex/scripts/claude_orchestrator.py resume JOB_ID \
+  --state-id GENERATED_STATE_ID --message "Continue with the remaining work"
 ```
+
+Default to omitting `--state-id` on the first launch. The orchestrator auto-generates a fresh state id, which avoids accidental collisions when agents launch jobs by habit.
 
 ## Key Concepts
 
@@ -121,6 +123,18 @@ state-root: ......
 </deliverable>
 ```
 
+If the prompt needs Claude to know generated paths up front, use placeholders instead of manually fixing `state_id`:
+
+- `{{STATE_ID}}`
+- `{{STATE_ROOT}}`
+- `{{JOB_ID}}`
+- `{{JOB_DIR}}`
+- `{{WORKDIR}}`
+- `{{SESSION_ID}}`
+
+The orchestrator expands those placeholders before Claude starts.
+It also automatically adds `state_root` to Claude's allowed directories. Use `--add-dir` only for extra paths outside `workdir` and `state_root`.
+
 **Prompt writing tips**:
 - Provide file paths and let Claude read them itself—it is an agent with investigation capabilities; you do not need to copy content into the prompt
 - When incorrect output is costly, include verification instructions in the task
@@ -130,13 +144,14 @@ state-root: ......
 
 - **One task, one focus**: each launch corresponds to a limited-scope task. Unrelated work should be launched as separate tasks and tracked independently.
 - **Review after completion**: wait for Claude Code to finish before reviewing; do not intervene midway.
+- **Use one-pass prompts**: write prompts that Claude can finish without follow-up interaction.
 
 ## Command Reference
 
 ### launch
 
 ```bash
-python ./claude-code-orchestrator/scripts/claude_orchestrator.py launch \
+python ~/.codex/skills/claude-for-codex/scripts/claude_orchestrator.py launch \
   --prompt "task description" \   # or --prompt-file path, or stdin
   --workdir /abs/path/to/repo \
   --model opus \                  # opus (recommended) or sonnet (cheaper)
@@ -145,6 +160,9 @@ python ./claude-code-orchestrator/scripts/claude_orchestrator.py launch \
   --replace \                     # replace a stopped task with the same id
   --dry-run                       # generate command only, do not execute
 ```
+
+Add `--state-id` only when you intentionally want multiple launches to share one state.
+Design prompts so Claude can finish in one pass.
 
 After running, the following fields are printed:
 ```text
@@ -160,46 +178,25 @@ command: ...
 
 ```bash
 # All tasks
-python ./claude-code-orchestrator/scripts/claude_orchestrator.py status --state-id STATE_ID
+python ~/.codex/skills/claude-for-codex/scripts/claude_orchestrator.py status \
+  --state-id STATE_ID
 
 # Single task + view both stdout and stderr
-python ./claude-code-orchestrator/scripts/claude_orchestrator.py status JOB_ID \
+python ~/.codex/skills/claude-for-codex/scripts/claude_orchestrator.py status JOB_ID \
   --state-id STATE_ID --tail 30 --tail-both
 ```
 
 ### resume
 
 ```bash
-python ./claude-code-orchestrator/scripts/claude_orchestrator.py resume JOB_ID \
+python ~/.codex/skills/claude-for-codex/scripts/claude_orchestrator.py resume JOB_ID \
   --state-id STATE_ID \
   --message "follow-up instructions" \
   --model opus \   # optional override
   --effort high    # optional override
 ```
 
-### answer
-
-```bash
-python ./claude-code-orchestrator/scripts/claude_orchestrator.py answer JOB_ID \
-  --state-id STATE_ID \
-  --updated-input-json '{"selectedOptionIds":["option1"]}' \
-  --resume-now
-```
-
 All commands support `--json` for JSON-formatted output.
-
-## Deferred Question Handling
-
-The orchestrator intercepts Claude's `AskUserQuestion` and `ExitPlanMode` via `PreToolUse` hooks.
-
-**Flow**:
-
-1. Claude triggers a question → the hook stores it in `pending-tool.json`, returns `defer`, and Claude exits cleanly while the session is preserved
-2. You check the status and `pending-tool.json` with `status JOB_ID --tail 30 --tail-both`
-3. Build a matching `updatedInput` based on the tool payload
-4. Write the answer and resume with `answer JOB_ID --updated-input-json ... --resume-now`
-
-**Note**: the `updatedInput` structure depends on the specific tool payload—you must inspect `pending-tool.json` before answering.
 
 ## Task Directory Structure
 
@@ -208,12 +205,10 @@ The orchestrator intercepts Claude's `AskUserQuestion` and `ExitPlanMode` via `P
 ├── registry.json              # Summary index of all tasks
 └── jobs/JOB_ID/
     ├── job.json               # Task metadata and attempt history
-    ├── settings.json          # Claude settings (including hook configuration)
+    ├── settings.json          # Claude settings
     ├── prompt.txt             # Launch prompt
     ├── attempt-NNNN-input.txt # Input for resume attempts
     ├── stdout.log             # Claude stdout
     ├── stderr.log             # Claude stderr
-    ├── pending-tool.json      # Captured deferred tool payload
-    └── pending-answer.json    # Operator-provided answer payload awaiting consumption
     └── output_doc_v1.md       # Document written for the user
 ```
